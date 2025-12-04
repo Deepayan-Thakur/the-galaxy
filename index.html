@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Full Particle Solar System</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', monospace; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        /* Navigation UI */
+        #nav-wrapper {
+            position: absolute; top: 20px; left: 0; width: 100%; 
+            z-index: 10; display: flex; justify-content: center;
+        }
+
+        #nav-container {
+            display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+            background: rgba(0, 0, 0, 0.8); padding: 10px 20px;
+            border-radius: 20px; border: 1px solid #333;
+            max-width: 95%; box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-btn {
+            background: none; border: 1px solid #333; color: #888; font-size: 0.75rem;
+            cursor: pointer; transition: all 0.3s; text-transform: uppercase;
+            font-weight: bold; letter-spacing: 1px; padding: 5px 10px; border-radius: 4px;
+        }
+
+        .nav-btn:hover, .nav-btn.active {
+            color: #fff; border-color: #fff; background: rgba(255,255,255,0.1);
+            text-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+        }
+
+        /* UI Layers */
+        #ui-layer {
+            position: absolute; bottom: 30px; width: 100%; text-align: center;
+            z-index: 5; pointer-events: none;
+        }
+
+        #instructions { color: rgba(255, 255, 255, 0.9); font-size: 1rem; margin-bottom: 5px; text-shadow: 0 0 5px #000; }
+        #error-msg { display: none; color: #ff4444; font-weight: bold; margin-bottom: 10px; }
+        
+        #video-debug {
+            position: absolute; bottom: 20px; right: 20px; z-index: 2;
+            width: 120px; height: 90px; border: 1px solid #444;
+            transform: scaleX(-1); opacity: 0.3; border-radius: 8px;
+        }
+    </style>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+</head>
+<body>
+
+    <div id="nav-wrapper">
+        <div id="nav-container">
+            <button class="nav-btn" onclick="switchMode('UNIVERSE')">Galaxy</button>
+            <button class="nav-btn" onclick="switchMode('SUN')">Sun</button>
+            <button class="nav-btn" onclick="switchMode('MERCURY')">Mercury</button>
+            <button class="nav-btn" onclick="switchMode('VENUS')">Venus</button>
+            <button class="nav-btn" onclick="switchMode('EARTH')">Earth</button>
+            <button class="nav-btn" onclick="switchMode('MOON')">Moon</button>
+            <button class="nav-btn" onclick="switchMode('MARS')">Mars</button>
+            <button class="nav-btn" onclick="switchMode('JUPITER')">Jupiter</button>
+            <button class="nav-btn" onclick="switchMode('SATURN')">Saturn</button>
+            <button class="nav-btn" onclick="switchMode('URANUS')">Uranus</button>
+            <button class="nav-btn" onclick="switchMode('NEPTUNE')">Neptune</button>
+            <button class="nav-btn" onclick="switchMode('PLUTO')">Pluto</button>
+        </div>
+    </div>
+
+    <div id="ui-layer">
+        <div id="error-msg">Camera Access Denied - Mouse Mode Active</div>
+        <div id="instructions">PINCH Hand to Crush | OPEN Hand to Build</div>
+    </div>
+
+    <video id="video-debug" playsinline></video>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- 1. SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020202);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 5000);
+        camera.position.z = 900;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        // --- 2. PARTICLE DATA ---
+        const particleCount = 20000; 
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+        
+        // Define all targets
+        const targets = { 
+            UNIVERSE: [], SUN: [], MERCURY: [], VENUS: [], EARTH: [], 
+            MOON: [], MARS: [], JUPITER: [], SATURN: [], URANUS: [], NEPTUNE: [], PLUTO: [] 
+        };
+        const targetColors = {
+            UNIVERSE: [], SUN: [], MERCURY: [], VENUS: [], EARTH: [], 
+            MOON: [], MARS: [], JUPITER: [], SATURN: [], URANUS: [], NEPTUNE: [], PLUTO: [] 
+        };
+
+        function push(arr, i, x, y, z) { arr[i*3]=x; arr[i*3+1]=y; arr[i*3+2]=z; }
+        
+        // Helper for Random Sphere Point
+        function getSpherePoint(r) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            return {
+                x: r * Math.sin(phi) * Math.cos(theta),
+                y: r * Math.sin(phi) * Math.sin(theta),
+                z: r * Math.cos(phi)
+            };
+        }
+
+        // --- 3. PROCEDURAL GENERATION ---
+
+        // 1. UNIVERSE (Scattered Stars)
+        for(let i=0; i<particleCount; i++) {
+            const r = 4000;
+            const x = (Math.random()-0.5)*r; const y = (Math.random()-0.5)*r; const z = (Math.random()-0.5)*r;
+            push(positions, i, x, y, z); // Set initial positions here too
+            push(targets.UNIVERSE, i, x, y, z);
+            push(targetColors.UNIVERSE, i, 1, 1, 1);
+        }
+
+        // 2. SUN (White/Yellow/Orange, Large)
+        for(let i=0; i<particleCount; i++) {
+            let p = getSpherePoint(300 * Math.cbrt(Math.random()));
+            // Add some "flares"
+            if(Math.random() > 0.95) { p.x*=1.2; p.y*=1.2; p.z*=1.2; }
+            push(targets.SUN, i, p.x, p.y, p.z);
+            
+            const r = Math.random();
+            if(r>0.8) push(targetColors.SUN, i, 1, 1, 0.8); // White hot
+            else if(r>0.4) push(targetColors.SUN, i, 1, 0.6, 0); // Orange
+            else push(targetColors.SUN, i, 1, 0.2, 0); // Red
+        }
+
+        // 3. MERCURY (Grey, Cratered)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(120);
+            push(targets.MERCURY, i, p.x, p.y, p.z);
+            const c = 0.5 + Math.random()*0.3;
+            push(targetColors.MERCURY, i, c, c, c);
+        }
+
+        // 4. VENUS (Orange/Yellow Clouds)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(180);
+            push(targets.VENUS, i, p.x, p.y, p.z);
+            push(targetColors.VENUS, i, 0.9, 0.6 + Math.random()*0.3, 0.1);
+        }
+
+        // 5. EARTH (Blue/Green/White)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(190);
+            push(targets.EARTH, i, p.x, p.y, p.z);
+            // Simple noise simulation for continents using sine waves
+            const noise = Math.sin(p.x*0.03) * Math.cos(p.y*0.03) * Math.sin(p.z*0.03);
+            
+            if(noise > 0.05) push(targetColors.EARTH, i, 0.1, 0.5, 0.1); // Green Land
+            else if(noise > -0.05) push(targetColors.EARTH, i, 0.9, 0.9, 1.0); // Clouds/Ice
+            else push(targetColors.EARTH, i, 0.0, 0.2, 0.8); // Blue Ocean
+        }
+
+        // 6. MOON (Light Grey)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(80);
+            push(targets.MOON, i, p.x, p.y, p.z);
+            const c = 0.7 + Math.random()*0.2;
+            push(targetColors.MOON, i, c, c, c);
+        }
+
+        // 7. MARS (Red/Rust)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(140);
+            push(targets.MARS, i, p.x, p.y, p.z);
+            push(targetColors.MARS, i, 0.8, 0.2 + Math.random()*0.2, 0.1);
+        }
+
+        // 8. JUPITER (Banded Gas Giant)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(380);
+            push(targets.JUPITER, i, p.x, p.y, p.z);
+            // Banding based on Y position
+            const band = Math.sin(p.y * 0.05);
+            if(band > 0.5) push(targetColors.JUPITER, i, 0.9, 0.8, 0.7); // Light
+            else if (band > 0) push(targetColors.JUPITER, i, 0.7, 0.5, 0.4); // Darker
+            else push(targetColors.JUPITER, i, 0.8, 0.6, 0.5); // Mix
+        }
+
+        // 9. SATURN (Tan + Rings)
+        for(let i=0; i<particleCount; i++) {
+            if(i < particleCount * 0.65) {
+                // Planet Body
+                const p = getSpherePoint(260);
+                push(targets.SATURN, i, p.x, p.y, p.z);
+                push(targetColors.SATURN, i, 0.8, 0.7, 0.5);
+            } else {
+                // Rings (Flat Disk)
+                const r = 320 + Math.random() * 180;
+                const theta = Math.random() * Math.PI * 2;
+                // Tilt the ring
+                const x0 = r * Math.cos(theta);
+                const z0 = r * Math.sin(theta);
+                const tiltAngle = 0.4; 
+                
+                const x = x0;
+                const y = x0 * Math.sin(tiltAngle); 
+                const z = z0; 
+
+                push(targets.SATURN, i, x, y, z);
+                push(targetColors.SATURN, i, 0.6, 0.6, 0.5);
+            }
+        }
+
+        // 10. URANUS (Cyan + Vertical Ring)
+        for(let i=0; i<particleCount; i++) {
+            if(i < particleCount * 0.8) {
+                const p = getSpherePoint(220);
+                push(targets.URANUS, i, p.x, p.y, p.z);
+                push(targetColors.URANUS, i, 0.4, 0.8, 0.9);
+            } else {
+                // Vertical Ring
+                const r = 260 + Math.random() * 40;
+                const theta = Math.random() * Math.PI * 2;
+                push(targets.URANUS, i, 0, r*Math.cos(theta), r*Math.sin(theta)); 
+                push(targetColors.URANUS, i, 0.8, 0.9, 1.0);
+            }
+        }
+
+        // 11. NEPTUNE (Deep Blue)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(215);
+            push(targets.NEPTUNE, i, p.x, p.y, p.z);
+            push(targetColors.NEPTUNE, i, 0.1, 0.2, 0.8 + Math.random()*0.2);
+        }
+
+        // 12. PLUTO (Beige/Grey, Tiny)
+        for(let i=0; i<particleCount; i++) {
+            const p = getSpherePoint(50);
+            push(targets.PLUTO, i, p.x, p.y, p.z);
+            push(targetColors.PLUTO, i, 0.7, 0.6, 0.5);
+        }
+
+        // Setup Geometry
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+            size: 4,
+            map: new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/disc.png'),
+            vertexColors: true, blending: THREE.AdditiveBlending,
+            depthWrite: false, transparent: true, opacity: 0.8
+        });
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+
+        // --- 4. LOGIC & ANIMATION ---
+        let currentMode = "UNIVERSE";
+        let isPinching = false;
+
+        window.switchMode = function(modeName) {
+            currentMode = modeName;
+            
+            // UI Update
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            // Find the button that was clicked or matches the mode
+            const btns = document.querySelectorAll('.nav-btn');
+            btns.forEach(b => {
+                if(b.innerText.toUpperCase().includes(modeName) || b.innerText.toUpperCase() === modeName) {
+                    b.classList.add('active');
+                }
+            });
+
+            // Camera Zoom Animation
+            let zDist = 800;
+            if(modeName === 'UNIVERSE') zDist = 1500;
+            else if(modeName === 'SUN') zDist = 1100;
+            else if(modeName === 'JUPITER' || modeName === 'SATURN') zDist = 900;
+            else if(modeName === 'PLUTO' || modeName === 'MOON' || modeName === 'MERCURY') zDist = 400;
+
+            new TWEEN.Tween(camera.position).to({ z: zDist }, 1500)
+                .easing(TWEEN.Easing.Quadratic.Out).start();
+        };
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            TWEEN.update();
+
+            const time = clock.getElapsedTime();
+            
+            // Rotate the whole system slightly
+            if(currentMode !== 'UNIVERSE') {
+                particles.rotation.y = time * 0.1;
+            } else {
+                particles.rotation.y = time * 0.02; // Slower for universe
+            }
+
+            const posAttr = particles.geometry.attributes.position.array;
+            const colAttr = particles.geometry.attributes.color.array;
+            
+            // Get Current Targets
+            const tPos = targets[currentMode];
+            const tCol = targetColors[currentMode];
+
+            for(let i=0; i<particleCount; i++) {
+                const ix = i*3; const iy = i*3+1; const iz = i*3+2;
+                
+                let tx = tPos[ix]; 
+                let ty = tPos[iy]; 
+                let tz = tPos[iz];
+                
+                // Color Morph (Lerp)
+                colAttr[ix] += (tCol[ix] - colAttr[ix]) * 0.04;
+                colAttr[iy] += (tCol[iy] - colAttr[iy]) * 0.04;
+                colAttr[iz] += (tCol[iz] - colAttr[iz]) * 0.04;
+
+                // Pinch Interaction (Implosion)
+                if (isPinching) { 
+                    tx *= 0.1; ty *= 0.1; tz *= 0.1; 
+                }
+
+                // Movement (Lerp)
+                const speed = (currentMode === "UNIVERSE") ? 0.02 : 0.06;
+                posAttr[ix] += (tx - posAttr[ix]) * speed;
+                posAttr[iy] += (ty - posAttr[iy]) * speed;
+                posAttr[iz] += (tz - posAttr[iz]) * speed;
+            }
+
+            particles.geometry.attributes.position.needsUpdate = true;
+            particles.geometry.attributes.color.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        // --- 5. AI INPUT ---
+        const videoElement = document.getElementById('video-debug');
+        
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const h = results.multiHandLandmarks[0];
+                const thumb = h[4];
+                const index = h[8];
+                const d = Math.sqrt(Math.pow(thumb.x-index.x,2) + Math.pow(thumb.y-index.y,2));
+                isPinching = (d < 0.05); // Sensitivity
+            } else { 
+                isPinching = false; 
+            }
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, minDetectionConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+        
+        // Start camera, handle errors gracefully
+        cameraFeed.start().catch(e => {
+            console.warn("Camera failed to start", e);
+            document.getElementById('error-msg').style.display = 'block';
+            videoElement.style.display = 'none';
+        });
+
+        // Initialize
+        window.switchMode('UNIVERSE');
+        animate();
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth/window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
